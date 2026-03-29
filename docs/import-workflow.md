@@ -288,7 +288,7 @@ java -jar ~/bcdl.jar -c ~/bandcamp-cookies.txt -d /home/brendan/Bandcamp -f flac
 
 # 2. Import with beets (moves files to /srv/music/Artist/Album/)
 #    chroma plugin auto-fingerprints tracks with low tag confidence
-sudo beet import -q --noincremental /home/brendan/Bandcamp/Artist/
+sudo $(which beet) import -q --noincremental /home/brendan/Bandcamp/Artist/
 
 # 3. Run jigsaw detection (script above)
 
@@ -316,7 +316,7 @@ sudo m4a-prep /home/brendan/Staging/Album\ Name        # dry run first
 sudo m4a-prep /home/brendan/Staging/Album\ Name --apply # then apply
 
 # 3. Import with beets (chroma fingerprinting active for low-confidence matches)
-sudo beet import -q --noincremental /home/brendan/Staging/
+sudo $(which beet) import -q --noincremental /home/brendan/Staging/
 
 # 4. Run jigsaw detection (script above)
 
@@ -347,10 +347,22 @@ cp -r /path/to/rip /home/brendan/Staging/Artist\ -\ Album/
 flac --test /home/brendan/Staging/Artist\ -\ Album/*.flac
 
 # 4. Import with beets
-sudo beet import -q --noincremental /home/brendan/Staging/Artist\ -\ Album/
+sudo $(which beet) import -q --noincremental /home/brendan/Staging/Artist\ -\ Album/
 
 # 5. Jigsaw detection, artwork, permissions, rescan (as above)
 ```
+
+---
+
+## beet import notes
+
+- **Always use `sudo $(which beet)`** — beet is installed via linuxbrew and not in root's PATH. `sudo beet` gives "command not found".
+- **Config symlink**: `/root/.config/beets/config.yaml` is symlinked to `/home/brendan/.config/beets/config.yaml` so sudo reads the correct config (directory: `/srv/music`). Without this symlink, beets defaults to `/root/Music`.
+- **Albums**: `sudo $(which beet) import -q --noincremental /path/to/folder/`
+- **Singletons** (single tracks, no album): `sudo $(which beet) import -qs --noincremental /path/to/folder/` — the `-s` flag imports as individual tracks rather than trying to match an album.
+- **quiet_fallback: asis** in config means unmatched files get imported with existing tags rather than skipped.
+- **Bandcamp albumartist**: beets may leave ALBUMARTIST empty on Bandcamp imports. Always check after import and set with `metaflac --set-tag="ALBUMARTIST=Artist Name"`.
+- **Post-import checklist**: (1) FLAC integrity: `flac --test`, (2) Jigsaw detection, (3) ALBUMARTIST set, (4) Cover art present, (5) `chown music:music`, (6) SELinux `chcon`, (7) Navidrome rescan.
 
 ---
 
