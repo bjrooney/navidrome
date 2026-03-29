@@ -1,0 +1,6 @@
+data/navidrome.db
+data/navidrome.db-shm
+data/navidrome.db-wal
+data/cache/
+data/plugins/
+sound/
