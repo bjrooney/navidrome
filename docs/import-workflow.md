@@ -280,32 +280,89 @@ When a folder has duplicate track numbers but no disc tags (e.g. two files both 
 
 ## Import workflow
 
+### From Bandcamp (FLAC)
+
 ```bash
-# 1. Copy to staging (outside Music/)
-sudo rclone copy "gdrive:Album Name" "/srv/music/Staging/Album Name" \
-  --config /home/brendan/.config/rclone/rclone.conf
+# 1. Download to staging
+java -jar ~/bcdl.jar -c ~/bandcamp-cookies.txt -d /home/brendan/Bandcamp -f flac brendanr
 
-# 2. Pre-import cleanup
-sudo find /srv/music -name "*.movpkg" -type d -print0 | xargs -0 sudo rm -rf
+# 2. Import with beets (moves files to /srv/music/Artist/Album/)
+#    chroma plugin auto-fingerprints tracks with low tag confidence
+sudo beet import -q --noincremental /home/brendan/Bandcamp/Artist/
 
-# 3. beets import
-beet import -q --noincremental /srv/music/Staging/
+# 3. Run jigsaw detection (script above)
 
-# 4. Run jigsaw detection (script above)
-
-# 5. Fix any splits found
-
-# 6. Artwork
+# 4. Artwork
 sacad "Artist" "Album" 500 "/srv/music/Artist/Album/cover.jpg"
-sudo find /srv/music \( -name "*.jpg" -o -name "*.png" \) -print0 | xargs -0 sudo chcon -t audio_home_t
 
-# 7. Permissions + rescan
+# 5. Permissions, SELinux, rescan
 sudo chown -R music:music /srv/music
+sudo find /srv/music \( -name "*.jpg" -o -name "*.png" \) -print0 | xargs -0 sudo chcon -t audio_home_t
 docker exec navidrome sqlite3 /data/navidrome.db \
   "UPDATE library SET last_scan_at = '2000-01-01 00:00:00' WHERE id = 1;"
 docker restart navidrome
-docker logs navidrome --tail=5
 ```
+
+### From Apple Music / Google Drive (M4A)
+
+```bash
+# 1. Copy to staging (outside /srv/music/)
+sudo rclone copy "gdrive:Album Name" "/home/brendan/Staging/Album Name" \
+  --config /home/brendan/.config/rclone/rclone.conf
+
+# 2. Run m4a-prep to sanitize tags BEFORE import
+#    Fixes: verbose dates, feat. bleed, accents, .movpkg, DRM check, artifacts
+sudo m4a-prep /home/brendan/Staging/Album\ Name        # dry run first
+sudo m4a-prep /home/brendan/Staging/Album\ Name --apply # then apply
+
+# 3. Import with beets (chroma fingerprinting active for low-confidence matches)
+sudo beet import -q --noincremental /home/brendan/Staging/
+
+# 4. Run jigsaw detection (script above)
+
+# 5. Fix any remaining splits found
+
+# 6. Artwork
+sacad "Artist" "Album" 500 "/srv/music/Artist/Album/cover.jpg"
+
+# 7. Permissions, SELinux, rescan
+sudo chown -R music:music /srv/music
+sudo find /srv/music \( -name "*.jpg" -o -name "*.png" \) -print0 | xargs -0 sudo chcon -t audio_home_t
+docker exec navidrome sqlite3 /data/navidrome.db \
+  "UPDATE library SET last_scan_at = '2000-01-01 00:00:00' WHERE id = 1;"
+docker restart navidrome
+```
+
+### From CD rips (XLD on macOS / Whipper on Linux)
+
+```bash
+# 1. Rip to FLAC with AccurateRip verification
+#    macOS: XLD → FLAC output, AccurateRip enabled
+#    Linux: whipper offset find (once), then whipper cd rip
+
+# 2. Copy ripped folder to staging
+cp -r /path/to/rip /home/brendan/Staging/Artist\ -\ Album/
+
+# 3. Verify FLAC integrity
+flac --test /home/brendan/Staging/Artist\ -\ Album/*.flac
+
+# 4. Import with beets
+sudo beet import -q --noincremental /home/brendan/Staging/Artist\ -\ Album/
+
+# 5. Jigsaw detection, artwork, permissions, rescan (as above)
+```
+
+---
+
+## AcoustID / Chromaprint setup
+
+beets `chroma` plugin is configured for acoustic fingerprint matching. When tag-based matching falls below confidence threshold, beets automatically fingerprints tracks via `fpcalc` and looks them up against the AcoustID database.
+
+- **fpcalc**: `/usr/bin/fpcalc` v1.6.0
+- **AcoustID API key**: configured in `~/.config/beets/config.yaml` (application: `beets-navidrome`)
+- **How it works**: fpcalc computes a spectral hash of the audio → submitted to AcoustID API → returns MusicBrainz recording ID → beets matches against MusicBrainz release
+- **Limitation**: fpcalc may fail on some m4a files with `Error reading from audio source` — these still match on tags alone
+- **Coverage**: mainstream music has high coverage; niche/indie may return no match (falls back to tag matching)
 
 ---
 
