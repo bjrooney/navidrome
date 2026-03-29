@@ -1,0 +1,23 @@
+name: navidrome
+
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    user: "954:954"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4533:4533"
+    environment:
+      ND_LOGLEVEL: info
+      ND_SESSIONTIMEOUT: 24h
+      ND_BASEURL: /music
+    volumes:
+      - ./data:/data
+      - /srv/music:/music:ro
+    networks:
+      - immich_default
+
+networks:
+  immich_default:
+    external: true

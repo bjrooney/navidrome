@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""
+m4a-prep — Pre-import sanitizer for M4A files heading into Navidrome.
+
+Scans a directory tree and fixes every known M4A problem that causes
+album splits or import issues:
+
+  1. Date tags: verbose ISO (2012-04-09T12:00:00Z) → plain YYYY
+  2. Empty dates: groups tracks by (albumartist, album), infers year
+     from siblings in the same album
+  3. albumartist feat. bleed: "Artist Feat. Guest" → "Artist"
+  4. albumartist with accented vs unaccented duplicates
+  5. .movpkg directories: deleted
+  6. .1.m4a / .2.m4a sacad-style duplicate artifacts: deleted
+  7. DRM check: flags files that can't be imported
+  8. Classical albumartist: flags entries > 80 chars for manual review
+
+Usage:
+    m4a-prep /path/to/staging/folder          # dry run (default)
+    m4a-prep /path/to/staging/folder --apply   # actually modify files
+    m4a-prep /srv/music --apply                # run against live library
+"""
+
+import argparse
+import collections
+import json
+import os
+import re
+import subprocess
+import sys
+import unicodedata
+
+# ── helpers ──────────────────────────────────────────────────────────
+
+def get_tags(fp):
+    """Read tags via ffprobe (works for any format ffmpeg supports)."""
+    try:
+        r = subprocess.run(
+            ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', fp],
+            capture_output=True, text=True, timeout=10
+        )
+        return json.loads(r.stdout).get('format', {}).get('tags', {})
+    except Exception:
+        return {}
+
+
+def set_m4a_tag(fp, tags_dict, dry_run=True):
+    """Set one or more metadata fields on an m4a file via ffmpeg.
+
+    tags_dict: {'date': '2012', 'album_artist': 'Andre 3000'}
+    """
+    tmp = fp + '.tmp.m4a'
+    cmd = ['ffmpeg', '-y', '-i', fp, '-c', 'copy']
+    for key, val in tags_dict.items():
+        cmd += ['-metadata', f'{key}={val}']
+    cmd.append(tmp)
+
+    if dry_run:
+        changes = ', '.join(f'{k}={v}' for k, v in tags_dict.items())
+        print(f'  [DRY] {os.path.basename(fp)}: would set {changes}')
+        return True
+
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode == 0 and os.path.exists(tmp):
+        os.replace(tmp, fp)
+        changes = ', '.join(f'{k}={v}' for k, v in tags_dict.items())
+        print(f'  SET {changes} → {os.path.basename(fp)}')
+        return True
+    else:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        print(f'  ERROR {os.path.basename(fp)}: {r.stderr[:200]}')
+        return False
+
+
+def strip_accents(s):
+    """Remove diacritics: André → Andre."""
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', s)
+        if unicodedata.category(c) != 'Mn'
+    )
+
+
+def strip_feat(aa):
+    """Remove feat./featuring suffixes: 'Artist Feat. Guest' → 'Artist'."""
+    return re.split(r'\s+(?:feat\.?|featuring)\s+', aa, flags=re.IGNORECASE)[0].strip()
+
+
+def is_drm(fp):
+    """Check if an m4a file appears to be DRM-protected."""
+    r = subprocess.run(
+        ['ffprobe', '-v', 'error', fp],
+        capture_output=True, text=True, timeout=10
+    )
+    return 'drm' in r.stderr.lower() or 'encrypted' in r.stderr.lower()
+
+
+# ── main ─────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Pre-import sanitizer for M4A files.')
+    parser.add_argument('directory', help='Directory to scan')
+    parser.add_argument('--apply', action='store_true',
+                        help='Actually modify files (default is dry run)')
+    args = parser.parse_args()
+
+    root_dir = os.path.abspath(args.directory)
+    dry_run = not args.apply
+
+    if dry_run:
+        print('=' * 60)
+        print('DRY RUN — no files will be modified')
+        print('Run with --apply to make changes')
+        print('=' * 60)
+    else:
+        print('=' * 60)
+        print('APPLYING CHANGES')
+        print('=' * 60)
+
+    stats = collections.Counter()
+
+    # ── Pass 1: Delete .movpkg directories ───────────────────────────
+    print('\n--- Checking for .movpkg directories...')
+    for dirpath, dirnames, filenames in os.walk(root_dir, topdown=True):
+        for d in list(dirnames):
+            if d.endswith('.movpkg'):
+                full = os.path.join(dirpath, d)
+                stats['movpkg_deleted'] += 1
+                if dry_run:
+                    print(f'  [DRY] Would delete .movpkg: {full}')
+                else:
+                    import shutil
+                    shutil.rmtree(full)
+                    print(f'  DELETED .movpkg: {full}')
+                dirnames.remove(d)
+
+    # ── Pass 2: Delete .1.m4a / .2.m4a duplicate artifacts ───────────
+    print('\n--- Checking for duplicate artifacts (.1.m4a, .2.m4a)...')
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        for fname in filenames:
+            if re.search(r'\.\d+\.m4a$', fname):
+                # Check that the base file exists
+                base = re.sub(r'\.\d+(\.m4a)$', r'\1', fname)
+                if base in filenames:
+                    fp = os.path.join(dirpath, fname)
+                    stats['artifacts_deleted'] += 1
+                    if dry_run:
+                        print(f'  [DRY] Would delete artifact: {fp}')
+                    else:
+                        os.remove(fp)
+                        print(f'  DELETED artifact: {fp}')
+
+    # ── Pass 3: Scan all m4a files, collect tags ─────────────────────
+    print('\n--- Scanning m4a files...')
+    album_tracks = collections.defaultdict(list)  # (aa, album) → [(fp, tags), ...]
+    all_m4a = []
+
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+        for fname in sorted(filenames):
+            if not fname.lower().endswith('.m4a'):
+                continue
+            fp = os.path.join(dirpath, fname)
+            tags = get_tags(fp)
+            all_m4a.append((fp, tags))
+
+            aa = tags.get('album_artist', '')
+            album = tags.get('album', '')
+            if aa and album:
+                album_tracks[(aa, album)].append((fp, tags))
+
+    print(f'  Found {len(all_m4a)} m4a files across {len(album_tracks)} albums')
+
+    # ── Pass 4: DRM check ────────────────────────────────────────────
+    print('\n--- Checking for DRM...')
+    drm_files = []
+    for fp, tags in all_m4a:
+        if is_drm(fp):
+            drm_files.append(fp)
+            stats['drm_flagged'] += 1
+            print(f'  DRM DETECTED: {fp}')
+    if not drm_files:
+        print('  No DRM files found')
+
+    # ── Pass 5: Date normalization ───────────────────────────────────
+    print('\n--- Normalizing date tags...')
+    for fp, tags in all_m4a:
+        date = tags.get('date', '')
+        if not date:
+            continue  # handled in Pass 6 (empty dates)
+
+        # Extract just the year
+        m = re.match(r'(\d{4})', date)
+        if m:
+            year = m.group(1)
+            if date != year:
+                stats['dates_normalized'] += 1
+                set_m4a_tag(fp, {'date': year}, dry_run=dry_run)
+        # else: non-standard date, leave it
+
+    # ── Pass 6: Empty dates — infer from album siblings ──────────────
+    print('\n--- Fixing empty date tags (infer from album siblings)...')
+    for (aa, album), tracks in album_tracks.items():
+        years = set()
+        empty_date_files = []
+        for fp, tags in tracks:
+            date = tags.get('date', '')
+            m = re.match(r'(\d{4})', date)
+            if m:
+                years.add(m.group(1))
+            else:
+                empty_date_files.append(fp)
+
+        if empty_date_files and len(years) == 1:
+            year = years.pop()
+            for fp in empty_date_files:
+                stats['dates_inferred'] += 1
+                set_m4a_tag(fp, {'date': year}, dry_run=dry_run)
+        elif empty_date_files and len(years) == 0:
+            for fp in empty_date_files:
+                stats['dates_missing'] += 1
+                print(f'  WARNING: no date anywhere for {aa} / {album}: {os.path.basename(fp)}')
+        elif empty_date_files and len(years) > 1:
+            for fp in empty_date_files:
+                stats['dates_ambiguous'] += 1
+                print(f'  WARNING: ambiguous year {sorted(years)} for {aa} / {album}: {os.path.basename(fp)}')
+
+    # ── Pass 7: albumartist feat. bleed ──────────────────────────────
+    print('\n--- Fixing albumartist feat. bleed...')
+
+    # Group albums by stripped albumartist to find feat. variants
+    canonical_aa = {}  # normalized_key → most common albumartist
+    for (aa, album), tracks in album_tracks.items():
+        key = strip_feat(strip_accents(aa)).lower()
+        if key not in canonical_aa:
+            canonical_aa[key] = collections.Counter()
+        canonical_aa[key][strip_feat(aa)] += len(tracks)
+
+    # Resolve to most common non-feat version
+    resolved = {}
+    for key, counter in canonical_aa.items():
+        resolved[key] = counter.most_common(1)[0][0]
+
+    for (aa, album), tracks in album_tracks.items():
+        key = strip_feat(strip_accents(aa)).lower()
+        target = resolved.get(key, aa)
+
+        for fp, tags in tracks:
+            current_aa = tags.get('album_artist', '')
+            stripped = strip_feat(current_aa)
+
+            if current_aa != stripped and stripped:
+                stats['feat_fixed'] += 1
+                set_m4a_tag(fp, {'album_artist': stripped}, dry_run=dry_run)
+            elif strip_accents(current_aa) != current_aa and target != current_aa:
+                # Accented vs non-accented: use the resolved canonical
+                stats['accent_fixed'] += 1
+                set_m4a_tag(fp, {'album_artist': target}, dry_run=dry_run)
+
+    # ── Pass 8: Flag long albumartist (classical) ────────────────────
+    print('\n--- Flagging long albumartist strings (classical/opera)...')
+    seen_long = set()
+    for fp, tags in all_m4a:
+        aa = tags.get('album_artist', '')
+        if len(aa) > 80 and aa not in seen_long:
+            seen_long.add(aa)
+            stats['long_aa_flagged'] += 1
+            album = tags.get('album', '?')
+            print(f'  REVIEW: {album} — albumartist is {len(aa)} chars: "{aa[:80]}..."')
+
+    # ── Pass 9: Year consistency check per album ─────────────────────
+    print('\n--- Checking year consistency per album...')
+    for (aa, album), tracks in sorted(album_tracks.items()):
+        years = set()
+        for fp, tags in tracks:
+            date = tags.get('date', '')
+            m = re.match(r'(\d{4})', date)
+            if m:
+                years.add(m.group(1))
+        if len(years) > 1:
+            stats['year_split_detected'] += 1
+            print(f'  SPLIT WARNING: {aa} / {album} has years {sorted(years)}')
+
+    # ── Summary ──────────────────────────────────────────────────────
+    print('\n' + '=' * 60)
+    print('SUMMARY')
+    print('=' * 60)
+    print(f'  Files scanned:           {len(all_m4a)}')
+    print(f'  .movpkg dirs deleted:    {stats["movpkg_deleted"]}')
+    print(f'  Duplicate artifacts:     {stats["artifacts_deleted"]}')
+    print(f'  DRM files flagged:       {stats["drm_flagged"]}')
+    print(f'  Dates normalized:        {stats["dates_normalized"]}')
+    print(f'  Dates inferred:          {stats["dates_inferred"]}')
+    print(f'  Dates missing (no ref):  {stats["dates_missing"]}')
+    print(f'  Dates ambiguous:         {stats["dates_ambiguous"]}')
+    print(f'  Feat. bleed fixed:       {stats["feat_fixed"]}')
+    print(f'  Accent mismatches fixed: {stats["accent_fixed"]}')
+    print(f'  Long albumartist flagged:{stats["long_aa_flagged"]}')
+    print(f'  Year splits detected:    {stats["year_split_detected"]}')
+
+    if dry_run:
+        print(f'\nDRY RUN — run with --apply to make changes')
+    else:
+        print(f'\nDone. Remember to fix SELinux after import:')
+        print(f'  sudo find /srv/music \\( -name "*.jpg" -o -name "*.png" \\) -print0 | xargs -0 sudo chcon -t audio_home_t')
+
+    return 0 if stats['drm_flagged'] == 0 else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
