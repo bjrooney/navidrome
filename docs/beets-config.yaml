@@ -1,0 +1,45 @@
+directory: /srv/music
+library: /home/brendan/.config/beets/musiclibrary.db
+
+import:
+  write: yes
+  copy: no
+  move: yes
+  resume: yes
+  incremental: yes
+  log: /home/brendan/.config/beets/import.log
+  quiet_fallback: asis
+  timid: no
+
+paths:
+  default: $albumartist/$album/$track $title
+  singleton: $artist/Singles/$title
+  comp: Various Artists/$album/$track $title
+
+plugins:
+  - chroma        # AcoustID fingerprinting — identifies tracks by audio, not tags
+  - fetchart
+  - embedart
+  - missing
+  - duplicates
+  - edit
+
+acoustid:
+  apikey: YOUR_ACOUSTID_API_KEY  # register at https://acoustid.org/new-application
+
+fetchart:
+  auto: yes
+  sources:
+    - filesystem  # cover.jpg already in folder
+    - coverart    # MusicBrainz cover art archive
+    - itunes
+    - amazon
+    - wikipedia
+  store_source: yes
+
+embedart:
+  auto: yes
+  ifempty: yes
+
+ui:
+  color: yes
