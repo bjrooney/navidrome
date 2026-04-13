@@ -1,0 +1,485 @@
+#!/usr/bin/env python3
+"""
+apple-prep — Apple Music M4A pre-import sanitizer for Navidrome.
+
+Purpose-built for Apple Music / iTunes exports. Folder = ground truth;
+tags get rewritten to match. Plans every edit up front, then applies in
+one ffmpeg pass per file.
+
+Handles, up front, every known Apple-Music split cause:
+
+  1. Missing album_artist (~50% of Apple exports) — backfilled from
+     the dominant artist in the folder (or "Various Artists" for
+     compilations, or composer for classical).
+  2. Verbose ISO dates (2010-04-03T22:52:03Z) — truncated to YYYY.
+  3. Empty/ambiguous dates — inferred from folder siblings when unique.
+  4. feat./ft./featuring bleed on artist + album_artist.
+  5. Compilation detection (folder path + cpil tag + artist diversity).
+  6. Classical: composer wins over the long performer string.
+  7. .movpkg DRM video packages — deleted.
+  8. .1.m4a / .2.m4a sacad/iTunes duplicate artifacts — deleted.
+  9. DRM-protected files — flagged, skipped.
+ 10. Zero-byte files — flagged, skipped.
+ 11. Album-name outliers inside one folder — flagged (multi-disc check).
+
+Parallel ffprobe + parallel ffmpeg writes. One rewrite per file max.
+
+Usage:
+    apple-prep /home/brendan/xld-rips/apple-music           # dry run
+    apple-prep /home/brendan/xld-rips/apple-music --apply   # write
+    apple-prep ... -j 16 --verbose                          # tune
+"""
+
+import argparse
+import collections
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+FFPROBE = ['ffprobe', '-v', 'error', '-print_format', 'json',
+           '-show_format', '-show_streams']
+
+FEAT_RE = re.compile(r'\s+(?:feat\.?|featuring|ft\.?)\s+.*$', re.IGNORECASE)
+YEAR_RE = re.compile(r'(\d{4})')
+ARTIFACT_RE = re.compile(r'\.\d+\.m4a$')
+
+COMPILATION_PATH_MARKERS = {'compilations', 'various artists', 'various'}
+
+
+# ── probing ──────────────────────────────────────────────────────────
+
+def probe(fp):
+    """Single ffprobe call returning (tags_dict, is_drm, raw_stderr)."""
+    r = subprocess.run(FFPROBE + [fp], capture_output=True, text=True,
+                       timeout=20)
+    try:
+        data = json.loads(r.stdout) if r.stdout else {}
+    except json.JSONDecodeError:
+        data = {}
+    tags = {k.lower(): v for k, v in data.get('format', {}).get('tags', {}).items()}
+    err = (r.stderr or '').lower()
+    drm = 'drm' in err or 'encrypt' in err or 'protected' in err
+    for s in data.get('streams', []):
+        if s.get('codec_name', '') in ('aac_drm', 'fairplay'):
+            drm = True
+    return tags, drm, r.stderr
+
+
+TAG_MAP = {
+    'title': '\xa9nam',
+    'artist': '\xa9ART',
+    'album_artist': 'aART',
+    'album': '\xa9alb',
+    'date': '\xa9day',
+    'year': '\xa9day',
+    'genre': '\xa9gen',
+    'track': 'trkn',
+    'composer': '\xa9wrt',
+    'comment': '\xa9cmt',
+    'disc': 'disk',
+    'compilation': 'cpil',
+}
+
+
+def write_tags(fp, diff):
+    """Rewrite an m4a's metadata in place using mutagen.
+
+    Uses mutagen (not ffmpeg) so the covr attached_pic atom is preserved —
+    ffmpeg's remux path silently drops the cover art stream on m4a, even
+    with -map 0 -c copy. Mutagen edits atoms in place without touching the
+    audio or cover data.
+    """
+    try:
+        from mutagen.mp4 import MP4
+    except ImportError:
+        return False, 'mutagen not installed (pip install mutagen)'
+    try:
+        tags = MP4(fp)
+    except Exception as e:
+        return False, f'mutagen open: {e}'
+    for k, v in diff.items():
+        key = TAG_MAP.get(k.lower())
+        if not key:
+            continue
+        if key == 'cpil':
+            tags[key] = bool(v) and str(v).lower() not in ('0', 'false', '')
+        elif key == 'trkn' or key == 'disk':
+            try:
+                n = int(str(v).split('/')[0])
+                tags[key] = [(n, 0)]
+            except (ValueError, TypeError):
+                continue
+        else:
+            tags[key] = [str(v)]
+    try:
+        tags.save()
+    except Exception as e:
+        return False, f'mutagen save: {e}'
+    return True, None
+
+
+# ── small helpers ────────────────────────────────────────────────────
+
+def strip_accents(s):
+    if not s: return s
+    return ''.join(c for c in unicodedata.normalize('NFD', s)
+                   if unicodedata.category(c) != 'Mn')
+
+
+def strip_feat(s):
+    if not s: return s
+    return FEAT_RE.sub('', s).strip()
+
+
+def year_of(s):
+    if not s: return None
+    m = YEAR_RE.match(s)
+    return m.group(1) if m else None
+
+
+def mode(values):
+    """Most common non-empty value, or None."""
+    c = collections.Counter(v for v in values if v)
+    return c.most_common(1)[0][0] if c else None
+
+
+# ── classification ───────────────────────────────────────────────────
+
+def classify_folder(folder, root, tags_list):
+    """Return one of: 'compilation', 'classical', 'normal'."""
+    rel = os.path.relpath(folder, root).lower()
+    parts = set(rel.split(os.sep))
+    if parts & COMPILATION_PATH_MARKERS:
+        return 'compilation'
+
+    artists = [t.get('artist', '') for t in tags_list]
+    distinct = {a for a in artists if a}
+    cpil_count = sum(1 for t in tags_list
+                     if str(t.get('compilation', '0')).strip() in ('1', 'true'))
+    # Apple sets cpil on best-ofs too, so require artist diversity as well.
+    if len(distinct) >= 3 and cpil_count >= max(1, len(tags_list) // 2):
+        return 'compilation'
+
+    has_composer = sum(1 for t in tags_list if t.get('composer'))
+    if has_composer >= max(1, len(tags_list) // 2):
+        aas = [t.get('album_artist') or t.get('artist', '') for t in tags_list]
+        max_len = max((len(a) for a in aas), default=0)
+        multi_performer = any(a.count(',') >= 2 or a.count('/') >= 2
+                              or ' & ' in a for a in aas)
+        if max_len > 60 or multi_performer:
+            return 'classical'
+
+    return 'normal'
+
+
+# ── planning ─────────────────────────────────────────────────────────
+
+def plan_folder(folder, root, entries):
+    """
+    entries: [(fp, tags), ...]
+    Returns (kind, per_file_diff_dict, warnings_list).
+    per_file_diff_dict: {fp: {tag_key: new_val, ...}}
+    """
+    tags_list = [t for _, t in entries]
+    kind = classify_folder(folder, root, tags_list)
+    warnings = []
+
+    # Target album_artist
+    if kind == 'compilation':
+        target_aa = 'Various Artists'
+    elif kind == 'classical':
+        target_aa = mode(t.get('composer') for t in tags_list)
+        if not target_aa:
+            target_aa = mode(strip_feat(t.get('album_artist', '') or
+                                        t.get('artist', '')) for t in tags_list)
+    else:
+        target_aa = mode(strip_feat(t.get('album_artist', '')) for t in tags_list)
+        if not target_aa:
+            target_aa = mode(strip_feat(t.get('artist', '')) for t in tags_list)
+
+    # Target year.
+    # Ambiguous → unify to max(year_set) as a proxy for album release year.
+    # (Apple tags best-of tracks with original recording year, causing splits.)
+    year_set = {y for y in (year_of(t.get('date', '')) for t in tags_list) if y}
+    if len(year_set) == 1:
+        target_year = next(iter(year_set))
+    elif len(year_set) > 1:
+        target_year = max(year_set)
+        warnings.append(('year_unified', (target_year, sorted(year_set))))
+    else:
+        target_year = None
+        warnings.append(('year_missing', None))
+
+    # Album name: unify to most-common casing (case-insensitive grouping).
+    # Leaves multi-disc folders alone since disc tags use different strings.
+    album_values = [t.get('album', '') for t in tags_list if t.get('album')]
+    album_set = set(album_values)
+    target_album = None
+    if len(album_set) > 1:
+        case_groups = collections.defaultdict(list)
+        for a in album_values:
+            case_groups[a.lower()].append(a)
+        if len(case_groups) == 1:
+            target_album = collections.Counter(album_values).most_common(1)[0][0]
+            warnings.append(('album_case_unified', (target_album, sorted(album_set))))
+        else:
+            warnings.append(('album_outliers', sorted(album_set)))
+
+    diffs = {}
+    for fp, tags in entries:
+        diff = {}
+
+        cur_aa = tags.get('album_artist', '')
+        if target_aa and cur_aa != target_aa:
+            diff['album_artist'] = target_aa
+
+        cur_artist = tags.get('artist', '')
+        stripped = strip_feat(cur_artist)
+        if stripped and stripped != cur_artist:
+            diff['artist'] = stripped
+
+        if target_year and tags.get('date', '') != target_year:
+            diff['date'] = target_year
+
+        if target_album and tags.get('album', '') != target_album:
+            diff['album'] = target_album
+
+        if diff:
+            diffs[fp] = diff
+
+    return kind, diffs, warnings
+
+
+# ── filesystem passes ────────────────────────────────────────────────
+
+def cleanup_pass(root, dry):
+    """Delete .movpkg dirs + .N.m4a duplicate artifacts."""
+    movpkg = 0
+    artifacts = 0
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        for d in list(dirnames):
+            if d.endswith('.movpkg'):
+                full = os.path.join(dirpath, d)
+                movpkg += 1
+                if not dry:
+                    shutil.rmtree(full, ignore_errors=True)
+                dirnames.remove(d)
+        for fn in filenames:
+            if ARTIFACT_RE.search(fn):
+                base = ARTIFACT_RE.sub('.m4a', fn)
+                if base in filenames:
+                    artifacts += 1
+                    if not dry:
+                        try:
+                            os.remove(os.path.join(dirpath, fn))
+                        except OSError:
+                            pass
+    return movpkg, artifacts
+
+
+def collect_m4a(root):
+    """Walk tree, return (live_files, zero_byte_files)."""
+    live = []
+    zero = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+        for fn in sorted(filenames):
+            if not fn.lower().endswith('.m4a'):
+                continue
+            fp = os.path.join(dirpath, fn)
+            try:
+                if os.path.getsize(fp) == 0:
+                    zero.append(fp)
+                    continue
+            except OSError:
+                continue
+            live.append(fp)
+    return live, zero
+
+
+# ── main ─────────────────────────────────────────────────────────────
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('directory')
+    ap.add_argument('--apply', action='store_true',
+                    help='Write changes (default: dry run)')
+    ap.add_argument('-j', '--jobs', type=int, default=8,
+                    help='Parallel ffprobe/ffmpeg workers (default: 8)')
+    ap.add_argument('-v', '--verbose', action='store_true',
+                    help='Print per-folder plan')
+    args = ap.parse_args()
+
+    root = os.path.abspath(args.directory)
+    dry = not args.apply
+
+    if not os.path.isdir(root):
+        print(f'error: not a directory: {root}', file=sys.stderr)
+        return 2
+
+    banner = 'DRY RUN — no files will be modified' if dry else 'APPLYING CHANGES'
+    print('=' * 72)
+    print(f'apple-prep — {banner}')
+    print(f'target: {root}')
+    print('=' * 72)
+
+    movpkg, artifacts = cleanup_pass(root, dry)
+    m4a_files, zero_byte = collect_m4a(root)
+
+    print(f'\nScanning {len(m4a_files)} m4a files '
+          f'({args.jobs} workers)...', file=sys.stderr)
+
+    probes = {}
+    drm = []
+    probe_errors = []
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        futs = {pool.submit(probe, fp): fp for fp in m4a_files}
+        done = 0
+        for fut in as_completed(futs):
+            fp = futs[fut]
+            done += 1
+            if done % 250 == 0:
+                print(f'  probed {done}/{len(m4a_files)}', file=sys.stderr)
+            try:
+                tags, is_drm, _ = fut.result()
+            except Exception as e:
+                probe_errors.append((fp, str(e)))
+                continue
+            if is_drm:
+                drm.append(fp)
+                continue
+            probes[fp] = tags
+
+    by_folder = collections.defaultdict(list)
+    for fp, tags in probes.items():
+        by_folder[os.path.dirname(fp)].append((fp, tags))
+
+    plan = {}
+    folder_meta = {}
+    warnings_by_folder = {}
+
+    for folder, entries in by_folder.items():
+        kind, diffs, warnings = plan_folder(folder, root, entries)
+        folder_meta[folder] = (kind, len(entries))
+        plan.update(diffs)
+        if warnings:
+            warnings_by_folder[folder] = warnings
+
+    kinds = collections.Counter(k for k, _ in folder_meta.values())
+    year_unified = [(f, w) for f, ws in warnings_by_folder.items()
+                    for w in ws if w[0] == 'year_unified']
+    year_missing = [f for f, ws in warnings_by_folder.items()
+                    for w in ws if w[0] == 'year_missing']
+    album_case = [(f, w) for f, ws in warnings_by_folder.items()
+                  for w in ws if w[0] == 'album_case_unified']
+    album_outliers = [(f, w) for f, ws in warnings_by_folder.items()
+                      for w in ws if w[0] == 'album_outliers']
+
+    print()
+    print('─' * 72)
+    print('  Folders:                   ', len(by_folder))
+    print('  Files scanned:             ', len(m4a_files))
+    print('  .movpkg dirs to delete:    ', movpkg)
+    print('  Duplicate artifacts:       ', artifacts)
+    print('  Zero-byte files:           ', len(zero_byte))
+    print('  DRM-protected:             ', len(drm))
+    print('  Probe errors:              ', len(probe_errors))
+    print('  Files to edit:             ', len(plan))
+    print('  Folder classification:     ', dict(kinds))
+    print('  Year-unified folders:      ', len(year_unified))
+    print('  Year-missing folders:      ', len(year_missing))
+    print('  Album case unified:        ', len(album_case))
+    print('  Album-outlier folders:     ', len(album_outliers))
+
+    if year_unified:
+        print('\n  Year unified to max (was ambiguous):')
+        for f, w in year_unified[:20]:
+            chosen, all_years = w[1]
+            print(f'    {os.path.relpath(f, root)} → {chosen}  (from {all_years})')
+        if len(year_unified) > 20:
+            print(f'    ... +{len(year_unified) - 20} more')
+
+    if album_case:
+        print('\n  Album name unified (case variants):')
+        for f, w in album_case:
+            chosen, all_variants = w[1]
+            print(f'    {os.path.relpath(f, root)} → {chosen!r}  (from {all_variants})')
+
+    if album_outliers:
+        print('\n  Folders with >1 distinct album name (not auto-fixed):')
+        for f, w in album_outliers[:10]:
+            print(f'    {os.path.relpath(f, root)}:')
+            for a in w[1]:
+                print(f'      - {a!r}')
+
+    if drm:
+        print(f'\n  DRM-protected files (will NOT be imported):')
+        for fp in drm[:20]:
+            print(f'    {os.path.relpath(fp, root)}')
+        if len(drm) > 20:
+            print(f'    ... +{len(drm) - 20} more')
+
+    if zero_byte:
+        print(f'\n  Zero-byte files:')
+        for fp in zero_byte[:20]:
+            print(f'    {os.path.relpath(fp, root)}')
+
+    if probe_errors:
+        print(f'\n  Probe errors:')
+        for fp, e in probe_errors[:10]:
+            print(f'    {os.path.relpath(fp, root)}: {e}')
+
+    if args.verbose:
+        print('\n  Per-folder plan:')
+        for folder in sorted(by_folder):
+            kind, n = folder_meta[folder]
+            edits = sum(1 for fp in plan if os.path.dirname(fp) == folder)
+            mark = '*' if edits else ' '
+            print(f'   {mark}[{kind:11}] {os.path.relpath(folder, root)} '
+                  f'({n} tracks, {edits} edits)')
+
+    if dry:
+        print('\nDry run. Re-run with --apply to write changes.')
+        return 0
+
+    if not plan:
+        print('\nNothing to write.')
+        return 0
+
+    print(f'\nWriting {len(plan)} files ({args.jobs} workers)...')
+    ok = 0
+    fail = 0
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        futs = {pool.submit(write_tags, fp, diff): fp
+                for fp, diff in plan.items()}
+        done = 0
+        for fut in as_completed(futs):
+            fp = futs[fut]
+            done += 1
+            if done % 100 == 0:
+                print(f'  wrote {done}/{len(plan)}', file=sys.stderr)
+            try:
+                success, err = fut.result()
+            except Exception as e:
+                fail += 1
+                print(f'  EXC  {os.path.relpath(fp, root)}: {e}')
+                continue
+            if success:
+                ok += 1
+            else:
+                fail += 1
+                print(f'  FAIL {os.path.relpath(fp, root)}: {err}')
+
+    print(f'\nWrote {ok} files, {fail} errors.')
+    print(f'\nNext: sudo $(which beet) import -q --noincremental {root}')
+    return 0 if fail == 0 else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
