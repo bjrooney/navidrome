@@ -4,3 +4,13 @@ data/navidrome.db-wal
 data/cache/
 data/plugins/
 sound/
+
+# Python bytecode
+bin/__pycache__/
+**/__pycache__/
+
+# Personal music library inventories — DO NOT commit to public repo
+apple_missing*.md
+apple_missing*.csv
+apple_download_batches.md
+owned_tracks_deduped.csv

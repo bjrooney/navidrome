@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ffprobe:*)",
+      "Bash(kubectl get:*)",
+      "Bash(journalctl:*)",
+      "Bash(sudo journalctl:*)",
+      "Bash(metaflac --show-tag*)",
+      "Bash(metaflac --list*)",
+      "Bash(tailscale status*)",
+      "Bash(sacad:*)",
+      "Bash(sudo sacad:*)",
+      "Bash(sudo /home/linuxbrew/.linuxbrew/bin/sacad:*)",
+      "mcp__claude_ai_Gmail__gmail_search_messages"
+    ]
+  }
+}
