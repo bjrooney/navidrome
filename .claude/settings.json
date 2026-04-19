@@ -2,11 +2,18 @@
   "permissions": {
     "allow": [
       "Bash(ffprobe:*)",
+      "Bash(sudo ffprobe:*)",
       "Bash(kubectl get:*)",
       "Bash(journalctl:*)",
       "Bash(sudo journalctl:*)",
       "Bash(metaflac --show-tag*)",
       "Bash(metaflac --list*)",
+      "Bash(sudo metaflac --show-tag*)",
+      "Bash(sudo metaflac --list*)",
+      "Bash(sudo metaflac --export-tags-to=-*)",
+      "Bash(flac --test*)",
+      "Bash(fpcalc:*)",
+      "Bash(sudo fpcalc:*)",
       "Bash(tailscale status*)",
       "Bash(sacad:*)",
       "Bash(sudo sacad:*)",
