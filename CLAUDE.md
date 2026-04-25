@@ -2,7 +2,7 @@
 
 ## Overview
 
-Self-hosted **Navidrome** music streaming server running via Docker Compose. Library: **527 albums / 5,782 tracks** (2026-04-20) from Bandcamp (FLAC), Apple Music (M4A), Google Drive, Dropbox, XLD CD rips, and OneDrive archive.
+Self-hosted **Navidrome** music streaming server running via Docker Compose. Library: **576 albums / 6,687 tracks** (2026-04-25) from Bandcamp (FLAC), Apple Music (M4A), Google Drive, Dropbox, XLD CD rips, OneDrive archive, Hyperion Records (KDE Connect FLAC), and blocSonic netBloc netlabel (CC FLAC).
 
 ## Running
 
@@ -18,6 +18,8 @@ docker compose logs -f
 - Three reachable routes: direct `http://<lan-ip>:4533/music/app/` (Chromecast-friendly), Traefik LAN plain-HTTP `http://fedora.local:4080/music/app/` (entrypoint `navidromelan` in `/etc/traefik/traefik.yml`), and Tailscale TLS `https://fedora.reindeer-python.ts.net/music/app/`
 - `data/` — Navidrome SQLite DB and cache (owned by UID 954)
 - `bin/m4a-prep` — Pre-import sanitizer for M4A files (normalizes tags, removes DRM, deduplicates)
+- `bin/stage-hyperion-downloads` — Group Hyperion Records FLACs from KDE Connect drops in `~/Downloads/` into per-album staging folders
+- `bin/stage-blocsonic-vol <NN>` — Download + stage one blocSonic netBloc volume from the direct-FLAC zip URL
 - `docs/` — Import workflow documentation and beets config
 
 Music library at `/srv/music` (btrfs, read-only mount). Staging from `~/Bandcamp/`.

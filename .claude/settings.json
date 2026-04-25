@@ -129,7 +129,11 @@
       "Edit(/tmp/**)",
       "Bash(bash /tmp/*)",
       "Bash(mkdir:*)",
-      "Bash(sudo rm:*)"
+      "Bash(sudo rm:*)",
+      "Bash(unzip:*)",
+      "Bash(rm -rf /tmp/*)",
+      "Bash(rm -rf /home/brendan/Bandcamp/*)",
+      "Bash(rm -rf /home/brendan/Downloads/*)"
     ]
   }
 }

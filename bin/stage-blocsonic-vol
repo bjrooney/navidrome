@@ -1,0 +1,74 @@
+#!/bin/bash
+# stage-blocsonic-vol <NN> — download + stage one blocSonic netBloc volume.
+#
+# blocSonic publishes the netBloc compilation series as direct-FLAC zips,
+# no Bandcamp middleman, no account. URL pattern:
+#   https://assets.blocsonic.com/releases/netblocs/bscomp00<NN>/00-netBlocVol<NN>_FLAC.zip
+#
+# This script:
+#   1. curl the zip into /tmp
+#   2. unzip it (excluding macOS __MACOSX junk dir)
+#   3. mv the album folder into ~/Bandcamp/Various Artists/ ready for beets import
+#   4. clean up the zip + extract scaffold
+#
+# After running, walk the standard /rip-style flow:
+#   sudo $(which beet) import -q --noincremental "/home/brendan/Bandcamp/Various Artists/"
+#   sudo chown -R music:music + sudo chcon -t audio_home_t on jpg
+#   docker exec navidrome sqlite3 /data/navidrome.db ... rescan
+#
+# Source profile: project_blocsonic.md memory.
+#
+# Usage:  bin/stage-blocsonic-vol 56
+#         bin/stage-blocsonic-vol 53 --keep-zip   # leave the zip in /tmp afterwards
+
+set -euo pipefail
+
+if [ -z "${1:-}" ]; then
+  echo "usage: $0 <volume-number> [--keep-zip]" >&2
+  exit 2
+fi
+
+vol=$1
+keep_zip=0
+[ "${2:-}" = "--keep-zip" ] && keep_zip=1
+
+zip=/tmp/netbloc${vol}.zip
+ext=/tmp/netbloc${vol}-extract
+url="https://assets.blocsonic.com/releases/netblocs/bscomp00${vol}/00-netBlocVol${vol}_FLAC.zip"
+stg="/home/brendan/Bandcamp/Various Artists"
+
+echo "downloading vol ${vol} from $url ..."
+curl -sSL --fail -o "$zip" "$url" || { echo "ERROR: download failed (HTTP error or network); aborting"; rm -f "$zip"; exit 1; }
+size=$(stat -c%s "$zip")
+[ "$size" -lt 1000000 ] && { echo "ERROR: zip is only $size bytes — likely a 404 HTML body. URL: $url"; rm -f "$zip"; exit 1; }
+echo "  downloaded $((size/1024/1024)) MB"
+
+mkdir -p "$ext" "$stg"
+unzip -q -o "$zip" -d "$ext"
+
+# Find the inner album dir, EXCLUDING __MACOSX junk that ships in every blocSonic zip
+album_dir=$(find "$ext" -mindepth 2 -maxdepth 2 -type d -not -path '*__MACOSX*' | head -1)
+if [ -z "$album_dir" ]; then
+  echo "ERROR: no album dir found in $ext; contents:" >&2
+  find "$ext" -maxdepth 3 -type d
+  exit 1
+fi
+echo "  album: $(basename "$album_dir")"
+
+# Move into staging
+target="$stg/$(basename "$album_dir")"
+if [ -e "$target" ]; then
+  echo "WARN: $target already exists — refusing to overwrite. Inspect and delete manually." >&2
+  exit 1
+fi
+mv "$album_dir" "$stg/"
+
+# Clean up
+rm -rf "$ext"
+[ "$keep_zip" = "0" ] && rm -f "$zip"
+
+echo
+echo "staged: $target"
+echo "  $(find "$target" -name '*.flac' | wc -l) flac, $(find "$target" -name 'cover.jpg' | wc -l) cover.jpg"
+echo
+echo "next: sudo \$(which beet) import -q --noincremental \"$stg/\""
