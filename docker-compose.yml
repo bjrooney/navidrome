@@ -7,11 +7,12 @@ services:
     user: "954:954"
     restart: unless-stopped
     ports:
-      - "127.0.0.1:4533:4533"
+      - "4533:4533"
     environment:
       ND_LOGLEVEL: info
       ND_SESSIONTIMEOUT: 24h
       ND_BASEURL: /music
+      ND_ENABLESHARING: "true"
     volumes:
       - ./data:/data
       - /srv/music:/music:ro

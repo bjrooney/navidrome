@@ -2,7 +2,7 @@
 
 ## Overview
 
-Self-hosted **Navidrome** music streaming server running via Docker Compose. Library: **517 albums / 5,597 tracks** (2026-04-17) from Bandcamp (FLAC), Apple Music (M4A), Google Drive, XLD CD rips, and OneDrive archive.
+Self-hosted **Navidrome** music streaming server running via Docker Compose. Library: **527 albums / 5,782 tracks** (2026-04-20) from Bandcamp (FLAC), Apple Music (M4A), Google Drive, Dropbox, XLD CD rips, and OneDrive archive.
 
 ## Running
 
@@ -14,7 +14,8 @@ docker compose logs -f
 
 ## Architecture
 
-- `docker-compose.yml` — Navidrome container on `127.0.0.1:4533`, base URL `/music`
+- `docker-compose.yml` — Navidrome container on `0.0.0.0:4533`, base URL `/music`
+- Three reachable routes: direct `http://<lan-ip>:4533/music/app/` (Chromecast-friendly), Traefik LAN plain-HTTP `http://fedora.local:4080/music/app/` (entrypoint `navidromelan` in `/etc/traefik/traefik.yml`), and Tailscale TLS `https://fedora.reindeer-python.ts.net/music/app/`
 - `data/` — Navidrome SQLite DB and cache (owned by UID 954)
 - `bin/m4a-prep` — Pre-import sanitizer for M4A files (normalizes tags, removes DRM, deduplicates)
 - `docs/` — Import workflow documentation and beets config
@@ -41,6 +42,7 @@ Runs on the `immich_default` Docker network (external).
 
 - **`/rip`** — import raw XLD CD rips from `/home/brendan/xld-rips/` (autonomous, 14 stages)
 - **`/apple`** — import Apple Music M4A batch from `/home/brendan/xld-rips/apple-music/` (autonomous, 12 stages)
+- **`/bandcamp`** — fetch + import Bandcamp FLAC purchases via bcdl.jar (autonomous, 15 stages; optional `<match>` arg to target a single item)
 - **`/backup-music`** — import importable audio (M4A, MP3) from OneDrive `/srv/backup/Music`; quarantine DRM'd M4P; dedup vs library (13 stages)
 - **`/genres`** — autonomous `beet lastgenre` backfill OR list gaps for Mac-side Picard + LastFM.NG enrichment
 - **`/import`** — reference doc + routing to the specialized commands
