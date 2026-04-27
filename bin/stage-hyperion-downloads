@@ -1,0 +1,104 @@
+#!/bin/bash
+# stage-hyperion-downloads — group Hyperion FLACs from /home/brendan/Downloads
+# into per-album folders under /home/brendan/Bandcamp/, ready for `sudo $(which beet) import`.
+#
+# Hyperion KDE Connect drop characteristics:
+#   - Filename pattern: <catalogue>-<disc>-<track>[-<suffix>].flac
+#       e.g. 120981-01-02-hr1.flac, 4871857-01-01.flac, 120972-01-04-FADE.flac
+#   - Tags pristine: ALBUM, ALBUMARTIST, ARTIST, TITLE, DATE, TRACKNUMBER, GENRE=Classical
+#       embedded PNG art on every track, no cover.jpg sidecar
+#   - KDE Connect appends " (N)" to filenames even with no real collision
+#       — strip on stage so beets sees the canonical filename
+#   - ALBUMARTIST often contains ":" (e.g. "Irene Messoloras: Meridian")
+#       — beets `replace:` map converts to "_" in folder name; stage with "_" already
+#   - Multi-year compilations end up with empty album.date in Navidrome — correct, not a bug
+#
+# Usage:
+#   bin/stage-hyperion-downloads             # process /home/brendan/Downloads/*.flac
+#   bin/stage-hyperion-downloads --dry-run   # show plan without moving
+#
+# After staging, the standard /rip post-flow applies:
+#   1. flac --test on the staged tree
+#   2. sudo $(which beet) import -q --noincremental <album-folder>/  (per album)
+#   3. ffmpeg-extract embedded PNG → cover.jpg sidecar (Hyperion ships no sidecar)
+#   4. sudo chown -R music:music + sudo chcon -t audio_home_t on jpg/png
+#   5. Navidrome rescan + reconcile
+
+set -euo pipefail
+
+DL=${DL:-/home/brendan/Downloads}
+STG=${STG:-/home/brendan/Bandcamp}
+DRY=${DRY:-0}
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
+# Find any FLAC in Downloads that has a Hyperion-style filename (catalogue-disc-track)
+mapfile -t flacs < <(find "$DL" -maxdepth 1 -name '*.flac' \
+  -regextype posix-extended -regex '.*/[0-9]+-[0-9]+-[0-9]+(-[A-Za-z0-9]+)?( \([0-9]+\))?\.flac$' \
+  | LC_ALL=C sort)
+
+if [ ${#flacs[@]} -eq 0 ]; then
+  echo "No Hyperion-pattern FLACs in $DL — nothing to stage."
+  exit 0
+fi
+
+echo "Found ${#flacs[@]} Hyperion FLAC(s)."
+
+declare -A albums  # key: "AA|||ALB" → space-separated source paths joined by NUL via base64
+
+for f in "${flacs[@]}"; do
+  aa=$(metaflac --show-tag=ALBUMARTIST "$f" | cut -d= -f2-)
+  alb=$(metaflac --show-tag=ALBUM "$f" | cut -d= -f2-)
+  if [ -z "$aa" ] || [ -z "$alb" ]; then
+    echo "WARN: $f has empty ALBUMARTIST or ALBUM — skipping" >&2
+    continue
+  fi
+  # beets replace map: ":" → "_" (we mirror this so the staging path matches the eventual /srv/music path)
+  aa_safe=${aa//:/_}
+  alb_safe=$alb  # no transform on album, beets handles it
+  key="$aa_safe///$alb_safe"
+  albums[$key]+="$f"$'\n'
+done
+
+# Plan output
+echo
+echo "Plan:"
+for key in "${!albums[@]}"; do
+  aa_safe=${key%%///*}
+  alb=${key##*///}
+  count=$(echo -n "${albums[$key]}" | grep -c .)
+  echo "  $STG/$aa_safe/$alb/  ← $count tracks"
+done
+
+if [ "$DRY" = "1" ]; then
+  echo
+  echo "(dry-run) — no files moved"
+  exit 0
+fi
+
+# Move files
+for key in "${!albums[@]}"; do
+  aa_safe=${key%%///*}
+  alb=${key##*///}
+  dest="$STG/$aa_safe/$alb"
+  mkdir -p "$dest"
+  while IFS= read -r src; do
+    [ -z "$src" ] && continue
+    base=$(basename "$src")
+    # strip " (N)" KDE Connect collision suffix
+    canonical=${base/ (1).flac/.flac}
+    canonical=${canonical/ (2).flac/.flac}
+    canonical=${canonical/ (3).flac/.flac}
+    /bin/mv -f "$src" "$dest/$canonical"
+  done <<< "${albums[$key]}"
+  echo "  staged: $dest ($(ls "$dest" | wc -l) files)"
+done
+
+echo
+echo "Done. Next steps:"
+echo "  1. flac --test the staged tree"
+echo "  2. For each album folder under $STG/, run:"
+echo "       sudo \$(which beet) import -q --noincremental \"$STG/<artist>/\""
+echo "  3. Extract cover.jpg from embedded PNG (Hyperion ships none):"
+echo "       sudo ffmpeg -y -i <flac> -an -vcodec copy <album>/cover.png && sudo ffmpeg -y -i <album>/cover.png <album>/cover.jpg && sudo rm <album>/cover.png"
+echo "  4. sudo chown -R music:music <album>/ && sudo chcon -t audio_home_t <album>/cover.jpg"
+echo "  5. Navidrome rescan + reconcile"

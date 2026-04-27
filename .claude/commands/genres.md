@@ -7,6 +7,7 @@ description: Fill genre gaps in the Navidrome library — autonomous beets lastg
 Two modes, triggered by the user's intent:
 
 - **`/genres backfill`** (or default, if no arg) — server-side autonomous `beet lastgenre` sweep over the whole library (or a scoped path). Fills every album/track whose GENRE tag is empty. Autonomous, no prompts.
+- **`/genres force`** — same as `backfill` but passes `--force` to `beet lastgenre`, **overwriting every existing GENRE tag** with fresh Last.fm lookups. Use when you want to re-tag from scratch (e.g. cleaning up bad genres from older imports). Destructive — old genres are lost, not merged.
 - **`/genres gaps`** — dry-run: list albums/tracks that still have **empty** GENRE after the backfill. These are the ones Last.fm doesn't know. Surface them so the user can run Picard+LastFM.NG manually on the Mac.
 - **`/genres picard`** — prepare a handoff list of gap albums for Mac-side Picard+LastFM.NG and stage them (or just print the paths). Picard isn't runnable headless on the server in a sensible way — this mode produces the *inputs* for a manual Mac-side pass.
 
@@ -19,6 +20,18 @@ Create tasks up front, run end-to-end.
 3. **`beet write` if needed** — `auto: yes` + `import.write: yes` already write on import, but on backfill over pre-existing items, lastgenre may only update the DB without touching files. Force a write: `sudo $(which beet) write` (no query = write all changed items).
 4. **Post-count** — same query as step 1. Report `filled` and `still-empty` totals.
 5. **Navidrome rescan** — reset `LastScan`, restart, wait for `"Scanner: Finished scanning all libraries"`. Navidrome re-reads genre from files.
+
+## Mode 1b — `force` (destructive overwrite)
+
+Identical to `backfill` but passes `--force` so `beet lastgenre` overwrites every existing GENRE tag, not just empties. **The old genre is lost.** Confirm the user meant this before running — one-liner like "About to overwrite GENRE on all N tagged albums. Proceed?" is fine, but skip the confirmation if they explicitly said "force" or "re-tag everything" in the invoking message.
+
+Steps as Mode 1, but step 2 becomes:
+
+```
+sudo $(which beet) lastgenre --force 2>&1 | tee /tmp/lastgenre.log
+```
+
+Still scopable: `sudo $(which beet) lastgenre --force "albumartist:X" "album:Y"` for per-album rewrites. The XLD `/rip` flow already uses this pattern per-album to work around the known import-time genre-write gotcha (see `project_library_state.md` history entries).
 
 ## Mode 2 — `gaps`
 
