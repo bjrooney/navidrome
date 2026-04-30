@@ -40,6 +40,16 @@ Runs on the `immich_default` Docker network (external).
 - Plugins: AcoustID (chroma), cover art fetch/embed, missing track detection, duplicate detection, **lastgenre** (Last.fm auto-genre, `auto: yes, force: no, count: 1`)
 - `httpx` + `pylast` installed into `/home/linuxbrew/.linuxbrew/lib/python3.14/site-packages` so `sudo beet` sees them
 
+## Convention: multi-line shell goes through `/tmp/*.sh`, not `bash -c`
+
+`.claude/settings.json` allowlists `Bash(bash /tmp/*)` and `Bash(/tmp/*.sh:*)` but does NOT (and *should not*) allowlist inline `bash -c '...'` or `python3 -c '...'`/`python3 <<'PY'` heredocs — those are equivalent to "trust arbitrary code" and would defeat the safety model. Each inline invocation prompts.
+
+**Rule:** any shell snippet that's more than one short pipeline — anything with `set -euo pipefail`, a loop, multiple statements, or a heredoc — must be written to `/tmp/<name>.sh` (or `.py`) via the `Write` tool, then invoked as `bash /tmp/<name>.sh`. One permission check covers the whole script.
+
+Don't reach for `bash -c '...'` just because it's one fewer step. The prompt friction it generates compounds across an autonomous import (a `/rip` or `/bandcamp` run is dozens of stages), and the user has been very clear that the inline-heredoc pattern is the dominant remaining source of prompt spam.
+
+Single-pipeline one-liners (`grep | head`, `find | wc -l`, `metaflac --show-tag=ALBUM file.flac`) are fine inline. The threshold is "would I write `set -euo pipefail` here?" — if yes, write a script.
+
 ## Slash commands (`.claude/commands/`)
 
 - **`/rip`** — import raw XLD CD rips from `/home/brendan/xld-rips/` (autonomous, 14 stages)
