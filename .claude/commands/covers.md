@@ -45,7 +45,6 @@ Full sweep on a 600-album library takes ~15 min; scoped sweeps for a 3-album imp
 
    **Known permanent gaps** (skip silently, no art source exists):
    - `IIain Banks` — Steep Approach to Garbadale (audiobook, no commercial cover)
-   - `Richmal Crompton` — Just William Home For The Holidays Disc 1 and Disc 2 (audiobook)
 
 2. **Pre-flight: NBSP path scan** — any folder whose path contains a non-breaking space (`U+00A0`) will silently fail `[ -d "$dir" ]` checks in bash, making the art write appear to succeed while writing nowhere. Before the recovery loop, scan:
    ```bash
@@ -162,4 +161,3 @@ The calling skill's task list should include a final task **"Cover art sweep (sc
 
 These have no art source anywhere — skip them in any run:
 - `IIain Banks / Steep approach to garbadale` (unabridged audiobook, no commercial release cover)
-- `Richmal Crompton / Just William Home For The Holidays (Disc 1 and Disc 2)` (BBC audiobook, no art on any service)
