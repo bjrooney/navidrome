@@ -85,7 +85,17 @@ Full sweep on a 600-album library takes ~15 min; scoped sweeps for a 3-album imp
    ```
    **Absolute path is mandatory** — sacad is not on sudo's PATH; plain `sacad` silently fails all calls and every result looks like a Discogs/sacad miss when it's actually "command not found". Use the same query-cleaning ladder as phase 1. Log pass/fail counts.
 
-5. **Phase 3 — iTunes Search API fallback** — for albums still missing after sacad:
+5. **Phase 3a — Audiobook book-cover fallback** — before hitting iTunes, check whether the album looks like an audiobook (heuristics: `album_artist` is an author name rather than a band, folder contains only spoken-word M4A/MP3s with no music-genre tag, or the album title matches a known novel/non-fiction title pattern). If so, skip the music-focused sacad/iTunes pipeline and instead search for the **physical book cover**:
+
+   1. **AbeBooks ISBN image** — the fastest path if you have an ISBN. Try `https://pictures.abebooks.com/isbn/<ISBN>-uk.jpg` (UK edition first, drop `-uk` for US). Derive the ISBN from the FLAC/M4A tags (`ISBN`, `COMMENT`, or `DESCRIPTION` fields sometimes carry it) or from an Open Library lookup by title+author.
+   2. **Open Library cover API** — `https://covers.openlibrary.org/b/title/<title>-L.jpg` or by OLID/ISBN: `https://covers.openlibrary.org/b/isbn/<ISBN>-L.jpg`. Returns a redirect to the cover image; follow it. `-L` = large (500px+), `-M` = medium.
+   3. **Google Books** — `curl -s "https://www.googleapis.com/books/v1/volumes?q=intitle:<title>+inauthor:<author>&maxResults=3"` → `items[0].volumeInfo.imageLinks.thumbnail` — swap `zoom=1` → `zoom=3` in the URL for higher res.
+
+   Validation threshold is the same: ≥300×300. Book covers are typically square or portrait; either is fine.
+
+   **Why:** audiobook releases often have no Discogs entry and no music-service listing, but the underlying book almost always has a commercial cover image. The physical book cover is the correct art for the audiobook — it's what the publisher uses on the CD/download release too (confirmed 2026-05-02: IIain Banks / Steep Approach to Garbadale cover sourced from AbeBooks ISBN page).
+
+6. **Phase 3b — iTunes Search API fallback** — for albums still missing after sacad (and phase 3a for audiobooks):
    ```bash
    curl -s "https://itunes.apple.com/search?term=ARTIST+ALBUM&entity=album&limit=5"
    ```
@@ -93,9 +103,9 @@ Full sweep on a 600-album library takes ~15 min; scoped sweeps for a 3-album imp
 
    Write to `/tmp/covers/<album_id>.jpg`.
 
-6. **Download + validate** — for each resolved URL (all three phases), `sudo curl -sL -o /tmp/covers/<album_id>.jpg "<url>"`. Validate: `file /tmp/covers/<album_id>.jpg` must report JPEG or PNG; dimensions check via `python3 -c "from PIL import Image; print(Image.open(...)size)"` — reject anything under 300×300 (sacad dimension filter sometimes lets tiny thumbnails through). Log rejects as "too small" and leave them unresolved.
+7. **Download + validate** — for each resolved URL (all three phases), `sudo curl -sL -o /tmp/covers/<album_id>.jpg "<url>"`. Validate: `file /tmp/covers/<album_id>.jpg` must report JPEG or PNG; dimensions check via `python3 -c "from PIL import Image; print(Image.open(...)size)"` — reject anything under 300×300 (sacad dimension filter sometimes lets tiny thumbnails through). Log rejects as "too small" and leave them unresolved.
 
-7. **Embed + drop cover.jpg** — for each resolved album, given its `folder_path` from stage 1:
+8. **Embed + drop cover.jpg** — for each resolved album, given its `folder_path` from stage 1:
 
    ```python
    # embed into every FLAC/M4A in the folder
@@ -112,14 +122,14 @@ Full sweep on a 600-album library takes ~15 min; scoped sweeps for a 3-album imp
 
    Write the embed loop to `/tmp/embed-covers.py` and run as `sudo /home/linuxbrew/.linuxbrew/bin/python3 /tmp/embed-covers.py` (linuxbrew Python has mutagen/Pillow; system Python 3.14 may not).
 
-8. **Permissions + SELinux** — after all writes:
+9. **Permissions + SELinux** — after all writes:
    ```bash
    sudo chown -R music:music /srv/music
    sudo find /srv/music \( -name '*.jpg' -o -name '*.png' \) -print0 | xargs -0 sudo chcon -t audio_home_t
    ```
    Always `-print0 | xargs -0` — plain xargs splits on spaces (see `feedback_selinux_xargs`). Also `chmod a+r` on new cover.jpg files so minidlna can read them (see `feedback_minidlna_perms`).
 
-9. **Navidrome rescan** — reset LastScan + restart:
+10. **Navidrome rescan** — reset LastScan + restart:
    ```bash
    docker exec navidrome sqlite3 /data/navidrome.db \
      "UPDATE property SET value='1970-01-01T00:00:00Z' WHERE id='LastScan';"
@@ -130,7 +140,7 @@ Full sweep on a 600-album library takes ~15 min; scoped sweeps for a 3-album imp
    docker logs -f navidrome 2>&1 | grep -m1 "Finished scanning"
    ```
 
-10. **Verify + report** — re-run the stage-1 SQL to confirm gap count dropped. Report:
+11. **Verify + report** — re-run the stage-1 SQL to confirm gap count dropped. Report:
     - Albums resolved by source (Discogs / sacad / iTunes)
     - Albums still missing (names + reason: "no Discogs hit + sacad miss + iTunes miss", or "known permanent gap")
     - Any NBSP renames from stage 2
