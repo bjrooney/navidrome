@@ -2,7 +2,7 @@
 
 ## Overview
 
-Self-hosted **Navidrome** music streaming server running via Docker Compose. Library: **576 albums / 6,687 tracks** (2026-04-25) from Bandcamp (FLAC), Apple Music (M4A), Google Drive, Dropbox, XLD CD rips, OneDrive archive, Hyperion Records (KDE Connect FLAC), and blocSonic netBloc netlabel (CC FLAC).
+Self-hosted **Navidrome** music streaming server running via Docker Compose. Library: **600 albums / 7,073 tracks** (2026-05-02) from Bandcamp (FLAC), Apple Music (M4A), Google Drive, Dropbox, XLD CD rips, OneDrive archive, Hyperion Records (KDE Connect FLAC), and blocSonic netBloc netlabel (CC FLAC).
 
 ## Running
 
