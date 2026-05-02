@@ -43,8 +43,7 @@ Full sweep on a 600-album library takes ~15 min; scoped sweeps for a 3-album imp
 
    Write to `/tmp/art-gaps.sql`, run via `docker exec -i navidrome sqlite3 /data/navidrome.db < /tmp/art-gaps.sql`. If scoped, filter by `album_artist IN (...)`. Report count. If zero, done — skip remaining stages.
 
-   **Known permanent gaps** (skip silently, no art source exists):
-   - `IIain Banks` — Steep Approach to Garbadale (audiobook, no commercial cover)
+   **Known permanent gaps** (skip silently, no art source exists): none currently — all resolved.
 
 2. **Pre-flight: NBSP path scan** — any folder whose path contains a non-breaking space (`U+00A0`) will silently fail `[ -d "$dir" ]` checks in bash, making the art write appear to succeed while writing nowhere. Before the recovery loop, scan:
    ```bash
@@ -159,5 +158,4 @@ The calling skill's task list should include a final task **"Cover art sweep (sc
 
 ## Known permanent gaps (do not retry)
 
-These have no art source anywhere — skip them in any run:
-- `IIain Banks / Steep approach to garbadale` (unabridged audiobook, no commercial release cover)
+None currently — all library gaps resolved as of 2026-05-02.
