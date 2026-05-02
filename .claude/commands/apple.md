@@ -50,6 +50,8 @@ The user has granted autonomous import permission (see `feedback_import_autonomo
    Always use `LC_ALL=C sort` — sqlite and system sort disagree on unicode collation and `comm` silently misreports otherwise. Spot-check 3 random imports for split-free state and confirm cover art is present (`ffprobe -select_streams v`).
 12. **Clear drop zone** — `sudo find /home/brendan/xld-rips/apple-music -mindepth 1 -delete` only after beets confirms the move and step 10 passes.
 
+13. **Cover art sweep** — inline the `/covers` skill, scoped to the just-imported album artists. Apple Music M4A often has embedded `covr` but this is the correct catch-all for anything that slipped through (single-track imports with wrong album titles, Apple-original releases not in Discogs, etc.). Pass the set of `album_artist` values from stage 5 as the scope filter.
+
 ## Post-run (do NOT add as tasks, do at end)
 
 - Report album/track delta, DRM skips, zero-byte skips, any splits fixed manually.

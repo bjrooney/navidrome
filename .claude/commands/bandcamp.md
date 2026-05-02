@@ -155,6 +155,8 @@ The user has granted autonomous import permission (see `feedback_import_autonomo
     ```
     **Never delete `/home/brendan/Bandcamp/` itself** — bcdl needs the directory + `bandcamp-collection-downloader.cache*` files. Preserve all `*.cache*` files (live cache + rotation backups).
 
+16. **Cover art sweep** — inline the `/covers` skill, scoped to the just-imported album artists. Bandcamp FLACs usually ship with art, so this is typically a no-op or catches 1–2 edge cases. Pass the set of `album_artist` values from stage 8 as the scope filter.
+
 ## Post-run (do NOT add as tasks, do at end)
 
 - Report: items downloaded, album/track delta (pre- vs post-import sqlite counts), FLAC-test failures, splits fixed, m4a copies deleted.

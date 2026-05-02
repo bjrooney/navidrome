@@ -59,6 +59,8 @@ Autonomous (per `feedback_import_autonomous`). Do not pause between stages unles
 
 13. **Cleanup staging** — `rm -rf /home/brendan/backup-staging/*` once beets has moved everything and the rescan passes. **Never delete from `/srv/backup` / OneDrive** in this skill — copy-and-leave. A separate future skill can offer to purge OneDrive once the user is satisfied.
 
+14. **Cover art sweep** — inline the `/covers` skill, scoped to the just-imported album artists. OneDrive-archive MP3s in particular rarely have art. Pass the set of `album_artist` values from stage 7 as the scope filter.
+
 ## Post-run (do NOT add as tasks, do at end)
 
 - Report: album/track delta, imported counts by format (m4a/mp3), dedup-dropped count, DRM quarantine count (282 M4P paths in `backup-m4p.md`), podcast/junk skip count.

@@ -2,6 +2,14 @@
 
 Reverse-chronological session journal. Newest first. Each entry is one short paragraph + links. For durable rules see `MEMORY.md` indexes; for service-specific facts see the relevant `CLAUDE.md`.
 
+## 2026-05-02 — feat/bandcamp-identify-hyperion — /covers skill + 10-album art sweep
+
+Built the `/covers` slash-command skill: full Discogs (authed token) → sacad → iTunes three-phase art recovery pipeline with scoped mode for post-import use. Added a final "Cover art sweep" stage to `/rip`, `/bandcamp`, `/apple`, and `/backup-music` so each import now ends with a scoped `/covers` pass. Immediately ran a full-library sweep: found 13 gaps (3 permanent audiobook skips), all 10 actionable albums resolved on Discogs first pass — 166 tracks embedded (FLAC + cover.jpg), chown/SELinux/chmod-a+r applied, Navidrome rescan confirmed 0 remaining actionable gaps.
+
+- Commits: `(this session)`
+- PR: existing draft
+- Service / scope: navidrome
+
 ## 2026-05-02 — feat/bandcamp-identify-hyperion — /rip 5 albums + /bandcamp Pigeon full release
 
 Ran `/rip` on 5 albums (Pigeon OUTTANATIONAL pre-order 3-track, Roy Buchanan Loading Zone + You're Not Alone, The Beatles Blue Album 1967-1970 2-disc, The Damned Phantasmagoria — 58 FLACs total, all clean). Also noted 7 folders in the drop zone had only `.cue`+`.m3u8` files — likely single-FLAC+cue rips where the FLAC wasn't transferred from the Mac (10cc, George Martin, Henry Mancini, Johnny Cash ×2, Lucky Dube, Nathan Mahl). Then `/bandcamp` pulled the full 10-track Pigeon OUTTANATIONAL release from Bandcamp, superseding the 3-track pre-order XLD rip; replaced in-place via `beet remove -a -d -f albumartist:Pigeon` before re-importing. Art: Roy Buchanan + Damned via sacad, Beatles via iTunes, Pigeon already embedded. Library: 596→600 albums, 7011→7073 tracks (+62 net across both runs). Pigeon genre still empty (2026 release, no Last.fm data yet).

@@ -90,6 +90,8 @@ Raw-rip source identification: any folder under `/home/brendan/xld-rips/` contai
     ```
     **Never** delete `/home/brendan/xld-rips/` itself — smbd fails every connection with "chdir failed" if the share root is missing. Preserve `apple-music/`, the Apple batch tracking notes, and `claude-handoff/`.
 
+15. **Cover art sweep** — inline the `/covers` skill, scoped to the just-imported album artists. Pass the set of `album_artist` values from stage 7 as the scope filter so it only queries the new albums rather than the whole library. This catches any albums that landed without art after the XLD/Qobuz import. Known permanent gaps (IIain Banks audiobook, Richmal Crompton audiobook) are skipped automatically inside `/covers`.
+
 ## Post-run (do NOT add as tasks, do at end)
 
 - Report album/track delta (pre- vs post-import sqlite counts), FLAC-test failures quarantined, duplicate rips resolved, splits fixed, m4a copies deleted, art sources used.

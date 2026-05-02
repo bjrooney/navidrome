@@ -57,6 +57,7 @@ Single-pipeline one-liners (`grep | head`, `find | wc -l`, `metaflac --show-tag=
 - **`/bandcamp`** — fetch + import Bandcamp FLAC purchases via bcdl.jar (autonomous, 15 stages; optional `<match>` arg to target a single item)
 - **`/backup-music`** — import importable audio (M4A, MP3) from OneDrive `/srv/backup/Music`; quarantine DRM'd M4P; dedup vs library (13 stages)
 - **`/genres`** — autonomous `beet lastgenre` backfill OR list gaps for Mac-side Picard + LastFM.NG enrichment
+- **`/covers`** — sweep library for missing cover art; Discogs → sacad → iTunes recovery; runs standalone or as a final stage appended to any import skill (scoped to just-imported artists)
 - **`/import`** — reference doc + routing to the specialized commands
 
 ## History
