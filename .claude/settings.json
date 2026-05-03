@@ -133,7 +133,11 @@
       "Bash(unzip:*)",
       "Bash(rm -rf /tmp/*)",
       "Bash(rm -rf /home/brendan/Bandcamp/*)",
-      "Bash(rm -rf /home/brendan/Downloads/*)"
+      "Bash(rm -rf /home/brendan/Downloads/*)",
+      "Bash(curl -sH:*)",
+      "Bash(curl -sLA:*)",
+      "mcp__nextcloud__collectives_get_pages",
+      "mcp__nextcloud__collectives_get_page"
     ]
   }
 }

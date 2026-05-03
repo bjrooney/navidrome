@@ -2,7 +2,7 @@
 
 ## Overview
 
-Self-hosted **Navidrome** music streaming server running via Docker Compose. Library: **576 albums / 6,687 tracks** (2026-04-25) from Bandcamp (FLAC), Apple Music (M4A), Google Drive, Dropbox, XLD CD rips, OneDrive archive, Hyperion Records (KDE Connect FLAC), and blocSonic netBloc netlabel (CC FLAC).
+Self-hosted **Navidrome** music streaming server running via Docker Compose. Library: **600 albums / 7,073 tracks** (2026-05-02) from Bandcamp (FLAC), Apple Music (M4A), Google Drive, Dropbox, XLD CD rips, OneDrive archive, Hyperion Records (KDE Connect FLAC), and blocSonic netBloc netlabel (CC FLAC).
 
 ## Running
 
@@ -57,6 +57,7 @@ Single-pipeline one-liners (`grep | head`, `find | wc -l`, `metaflac --show-tag=
 - **`/bandcamp`** — fetch + import Bandcamp FLAC purchases via bcdl.jar (autonomous, 15 stages; optional `<match>` arg to target a single item)
 - **`/backup-music`** — import importable audio (M4A, MP3) from OneDrive `/srv/backup/Music`; quarantine DRM'd M4P; dedup vs library (13 stages)
 - **`/genres`** — autonomous `beet lastgenre` backfill OR list gaps for Mac-side Picard + LastFM.NG enrichment
+- **`/covers`** — sweep library for missing cover art; Discogs → sacad → iTunes recovery; runs standalone or as a final stage appended to any import skill (scoped to just-imported artists)
 - **`/import`** — reference doc + routing to the specialized commands
 
 ## History
